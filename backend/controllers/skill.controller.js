@@ -8,14 +8,14 @@ const createSkill = async (req, res) => {
   const { skill_name, category, description, availability, credits_per_hour } = req.body;
 
   try {
-    const [result] = await db.query(
+    const [rows] = await db.query(
       `INSERT INTO skills
          (user_id, skill_name, category, description, availability, credits_per_hour)
-       VALUES (?, ?, ?, ?, ?, ?)`,
+       VALUES ($1, $2, $3, $4, $5, $6) RETURNING id`,
       [req.user.id, skill_name, category, description, availability, credits_per_hour || 1]
     );
 
-    res.status(201).json({ message: 'Skill added', id: result.insertId });
+    res.status(201).json({ message: 'Skill added', id: rows[0].id });
   } catch (err) {
     console.error('createSkill error:', err);
     res.status(500).json({ error: 'Failed to create skill' });
@@ -28,20 +28,22 @@ const getAllSkills = async (req, res) => {
   const offset = (page - 1) * limit;
 
   try {
-    // Build dynamic WHERE clause – parameterised to prevent injection
     const conditions = ['s.is_active = TRUE', 'u.is_blocked = FALSE'];
     const params     = [];
+    let   paramIdx   = 1;
 
     if (search) {
-      conditions.push('(s.skill_name LIKE ? OR s.description LIKE ?)');
+      conditions.push(`(s.skill_name ILIKE $${paramIdx} OR s.description ILIKE $${paramIdx + 1})`);
       params.push(`%${search}%`, `%${search}%`);
+      paramIdx += 2;
     }
     if (category) {
-      conditions.push('s.category = ?');
+      conditions.push(`s.category = $${paramIdx}`);
       params.push(category);
+      paramIdx++;
     }
 
-    const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
+    const where = `WHERE ${conditions.join(' AND ')}`;
 
     const [skills] = await db.query(
       `SELECT s.*, u.name AS provider_name, u.avatar_url, u.location,
@@ -52,20 +54,20 @@ const getAllSkills = async (req, res) => {
        JOIN users u ON s.user_id = u.id
        LEFT JOIN ratings r ON r.to_user = u.id
        ${where}
-       GROUP BY s.id
+       GROUP BY s.id, u.name, u.avatar_url, u.location, u.trust_score, u.strike_count
        ORDER BY s.created_at DESC
-       LIMIT ? OFFSET ?`,
+       LIMIT $${paramIdx} OFFSET $${paramIdx + 1}`,
       [...params, parseInt(limit), parseInt(offset)]
     );
 
-    // Total count for pagination
-    const [[{ total }]] = await db.query(
+    const [countRows] = await db.query(
       `SELECT COUNT(*) AS total FROM skills s
        JOIN users u ON s.user_id = u.id
        ${where}`,
       params
     );
 
+    const total = parseInt(countRows[0].total);
     res.json({ skills, total, page: parseInt(page), limit: parseInt(limit) });
   } catch (err) {
     console.error('getAllSkills error:', err);
@@ -77,7 +79,7 @@ const getAllSkills = async (req, res) => {
 const getMySkills = async (req, res) => {
   try {
     const [skills] = await db.query(
-      'SELECT * FROM skills WHERE user_id = ? ORDER BY created_at DESC',
+      'SELECT * FROM skills WHERE user_id = $1 ORDER BY created_at DESC',
       [req.user.id]
     );
     res.json(skills);
@@ -100,7 +102,7 @@ const getSkillById = async (req, res) => {
        FROM skills s
        JOIN users u ON s.user_id = u.id
        LEFT JOIN ratings r ON r.to_user = u.id
-       WHERE s.id = ?
+       WHERE s.id = $1
        GROUP BY s.id, s.user_id, s.skill_name, s.category, s.description,
                 s.availability, s.credits_per_hour, s.is_active, s.created_at,
                 u.id, u.name, u.bio, u.avatar_url, u.location, u.trust_score, u.strike_count`,
@@ -119,15 +121,14 @@ const updateSkill = async (req, res) => {
   const { skill_name, category, description, availability, credits_per_hour, is_active } = req.body;
 
   try {
-    // Ownership check
-    const [rows] = await db.query('SELECT user_id FROM skills WHERE id = ?', [req.params.id]);
+    const [rows] = await db.query('SELECT user_id FROM skills WHERE id = $1', [req.params.id]);
     if (!rows.length || rows[0].user_id !== req.user.id) {
       return res.status(403).json({ error: 'Not authorised' });
     }
 
     await db.query(
-      `UPDATE skills SET skill_name=?, category=?, description=?,
-         availability=?, credits_per_hour=?, is_active=? WHERE id=?`,
+      `UPDATE skills SET skill_name=$1, category=$2, description=$3,
+         availability=$4, credits_per_hour=$5, is_active=$6 WHERE id=$7`,
       [skill_name, category, description, availability, credits_per_hour, is_active, req.params.id]
     );
 
@@ -140,12 +141,12 @@ const updateSkill = async (req, res) => {
 // ── Delete Skill ───────────────────────────────────────────
 const deleteSkill = async (req, res) => {
   try {
-    const [rows] = await db.query('SELECT user_id FROM skills WHERE id = ?', [req.params.id]);
+    const [rows] = await db.query('SELECT user_id FROM skills WHERE id = $1', [req.params.id]);
     if (!rows.length || rows[0].user_id !== req.user.id) {
       return res.status(403).json({ error: 'Not authorised' });
     }
 
-    await db.query('DELETE FROM skills WHERE id = ?', [req.params.id]);
+    await db.query('DELETE FROM skills WHERE id = $1', [req.params.id]);
     res.json({ message: 'Skill deleted' });
   } catch (err) {
     res.status(500).json({ error: 'Delete failed' });

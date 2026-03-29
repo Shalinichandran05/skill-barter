@@ -6,13 +6,13 @@ const db = require('../config/db');
 // ═══════════════════════════════════════
 const getStats = async (_req, res) => {
   try {
-    const [[{ total_users }]]       = await db.query("SELECT COUNT(*) AS total_users FROM users WHERE role='user'");
-    const [[{ total_skills }]]      = await db.query("SELECT COUNT(*) AS total_skills FROM skills");
-    const [[{ total_requests }]]    = await db.query("SELECT COUNT(*) AS total_requests FROM skill_requests");
-    const [[{ completed }]]         = await db.query("SELECT COUNT(*) AS completed FROM skill_requests WHERE status='completed'");
-    const [[{ total_disputes }]]    = await db.query("SELECT COUNT(*) AS total_disputes FROM disputes");
-    const [[{ open_disputes }]]     = await db.query("SELECT COUNT(*) AS open_disputes FROM disputes WHERE status='open'");
-    const [[{ credits_exchanged }]] = await db.query("SELECT COALESCE(SUM(credits),0) AS credits_exchanged FROM credit_transactions WHERE transaction_type='transfer'");
+    const [u]  = await db.query("SELECT COUNT(*) AS total_users FROM users WHERE role='user'");
+    const [sk] = await db.query("SELECT COUNT(*) AS total_skills FROM skills");
+    const [rq] = await db.query("SELECT COUNT(*) AS total_requests FROM skill_requests");
+    const [cp] = await db.query("SELECT COUNT(*) AS completed FROM skill_requests WHERE status='completed'");
+    const [dt] = await db.query("SELECT COUNT(*) AS total_disputes FROM disputes");
+    const [od] = await db.query("SELECT COUNT(*) AS open_disputes FROM disputes WHERE status='open'");
+    const [cr] = await db.query("SELECT COALESCE(SUM(credits),0) AS credits_exchanged FROM credit_transactions WHERE transaction_type='transfer'");
 
     const [recent_requests] = await db.query(
       `SELECT sr.id, sr.status, sr.created_at, sr.hours_requested,
@@ -35,10 +35,15 @@ const getStats = async (_req, res) => {
     );
 
     res.json({
-      total_users, total_skills, total_requests, completed,
-      total_disputes, open_disputes,
-      credits_exchanged: parseFloat(credits_exchanged).toFixed(2),
-      recent_requests, recent_disputes,
+      total_users:        parseInt(u[0].total_users),
+      total_skills:       parseInt(sk[0].total_skills),
+      total_requests:     parseInt(rq[0].total_requests),
+      completed:          parseInt(cp[0].completed),
+      total_disputes:     parseInt(dt[0].total_disputes),
+      open_disputes:      parseInt(od[0].open_disputes),
+      credits_exchanged:  parseFloat(cr[0].credits_exchanged).toFixed(2),
+      recent_requests,
+      recent_disputes,
     });
   } catch (err) {
     console.error('getStats:', err);
@@ -58,15 +63,15 @@ const getAllUsers = async (req, res) => {
       `SELECT id, name, email, credits, locked_credits,
               trust_score, strike_count, is_blocked, created_at, avatar_url, location
        FROM users
-       WHERE (name LIKE ? OR email LIKE ?) AND role = 'user'
-       ORDER BY created_at DESC LIMIT ? OFFSET ?`,
+       WHERE (name ILIKE $1 OR email ILIKE $2) AND role = 'user'
+       ORDER BY created_at DESC LIMIT $3 OFFSET $4`,
       [like, like, parseInt(limit), parseInt(offset)]
     );
-    const [[{ total }]] = await db.query(
-      "SELECT COUNT(*) AS total FROM users WHERE (name LIKE ? OR email LIKE ?) AND role='user'",
+    const [countRows] = await db.query(
+      "SELECT COUNT(*) AS total FROM users WHERE (name ILIKE $1 OR email ILIKE $2) AND role='user'",
       [like, like]
     );
-    res.json({ users, total });
+    res.json({ users, total: parseInt(countRows[0].total) });
   } catch (err) {
     res.status(500).json({ error: 'Failed to fetch users' });
   }
@@ -74,26 +79,28 @@ const getAllUsers = async (req, res) => {
 
 const getUserDetail = async (req, res) => {
   try {
-    const [[user]] = await db.query(
+    const [rows] = await db.query(
       `SELECT id, name, email, role, credits, locked_credits, bio,
               trust_score, strike_count, is_blocked, created_at, avatar_url, location, mobile
-       FROM users WHERE id = ?`,
+       FROM users WHERE id = $1`,
       [req.params.id]
     );
-    if (!user) return res.status(404).json({ error: 'User not found' });
+    if (!rows.length) return res.status(404).json({ error: 'User not found' });
+
+    const user = rows[0];
 
     const [skills] = await db.query(
-      'SELECT id, skill_name, category, is_active FROM skills WHERE user_id = ?',
+      'SELECT id, skill_name, category, is_active FROM skills WHERE user_id = $1',
       [req.params.id]
     );
-    const [[counts]] = await db.query(
+    const [countRows] = await db.query(
       `SELECT COUNT(*) AS total,
-              SUM(status='completed') AS completed,
-              SUM(status='disputed')  AS disputed
-       FROM skill_requests WHERE requester_id = ? OR provider_id = ?`,
+              SUM(CASE WHEN status='completed' THEN 1 ELSE 0 END) AS completed,
+              SUM(CASE WHEN status='disputed'  THEN 1 ELSE 0 END) AS disputed
+       FROM skill_requests WHERE requester_id = $1 OR provider_id = $2`,
       [req.params.id, req.params.id]
     );
-    res.json({ ...user, skills, request_counts: counts });
+    res.json({ ...user, skills, request_counts: countRows[0] });
   } catch (err) {
     res.status(500).json({ error: 'Failed to fetch user detail' });
   }
@@ -101,11 +108,11 @@ const getUserDetail = async (req, res) => {
 
 const toggleBlock = async (req, res) => {
   try {
-    const [[user]] = await db.query('SELECT is_blocked, role FROM users WHERE id = ?', [req.params.id]);
-    if (!user) return res.status(404).json({ error: 'User not found' });
-    if (user.role === 'admin') return res.status(403).json({ error: 'Cannot block admin' });
-    const newState = !user.is_blocked;
-    await db.query('UPDATE users SET is_blocked = ? WHERE id = ?', [newState, req.params.id]);
+    const [rows] = await db.query('SELECT is_blocked, role FROM users WHERE id = $1', [req.params.id]);
+    if (!rows.length) return res.status(404).json({ error: 'User not found' });
+    if (rows[0].role === 'admin') return res.status(403).json({ error: 'Cannot block admin' });
+    const newState = !rows[0].is_blocked;
+    await db.query('UPDATE users SET is_blocked = $1 WHERE id = $2', [newState, req.params.id]);
     res.json({ message: `User ${newState ? 'blocked' : 'unblocked'}`, is_blocked: newState });
   } catch (err) {
     res.status(500).json({ error: 'Action failed' });
@@ -115,18 +122,19 @@ const toggleBlock = async (req, res) => {
 const manageStrike = async (req, res) => {
   const { action } = req.body;
   try {
-    const [[user]] = await db.query(
-      'SELECT strike_count, trust_score FROM users WHERE id = ?', [req.params.id]
+    const [rows] = await db.query(
+      'SELECT strike_count, trust_score FROM users WHERE id = $1', [req.params.id]
     );
-    if (!user) return res.status(404).json({ error: 'User not found' });
+    if (!rows.length) return res.status(404).json({ error: 'User not found' });
 
+    const user       = rows[0];
     const newStrikes = action === 'add' ? user.strike_count + 1 : Math.max(0, user.strike_count - 1);
     const newTrust   = action === 'add'
       ? Math.max(0,   parseFloat(user.trust_score) - 10)
       : Math.min(100, parseFloat(user.trust_score) + 10);
 
     await db.query(
-      'UPDATE users SET strike_count = ?, trust_score = ? WHERE id = ?',
+      'UPDATE users SET strike_count = $1, trust_score = $2 WHERE id = $3',
       [newStrikes, newTrust, req.params.id]
     );
     res.json({ message: `Strike ${action === 'add' ? 'added' : 'removed'}`, strike_count: newStrikes, trust_score: newTrust });
@@ -143,17 +151,23 @@ const adjustCredits = async (req, res) => {
   const conn = await db.getConnection();
   try {
     await conn.beginTransaction();
-    const [[user]] = await conn.query('SELECT credits FROM users WHERE id = ?', [req.params.id]);
-    if (!user) { await conn.rollback(); return res.status(404).json({ error: 'User not found' }); }
+    const [rows] = await conn.query('SELECT credits FROM users WHERE id = $1', [req.params.id]);
+    if (!rows.length) { await conn.rollback(); return res.status(404).json({ error: 'User not found' }); }
 
-    const newBal = parseFloat(user.credits) + parsed;
+    const newBal = parseFloat(rows[0].credits) + parsed;
     if (newBal < 0) { await conn.rollback(); return res.status(400).json({ error: 'Would result in negative balance' }); }
 
-    await conn.query('UPDATE users SET credits = ? WHERE id = ?', [newBal, req.params.id]);
+    await conn.query('UPDATE users SET credits = $1 WHERE id = $2', [newBal, req.params.id]);
     await conn.query(
       `INSERT INTO credit_transactions (from_user, to_user, credits, transaction_type, note)
-       VALUES (?, ?, ?, ?, ?)`,
-      [parsed < 0 ? req.params.id : null, parsed > 0 ? req.params.id : null, Math.abs(parsed), parsed > 0 ? 'bonus' : 'spend', '[Admin] ' + (reason || 'Credit adjustment')]
+       VALUES ($1, $2, $3, $4, $5)`,
+      [
+        parsed < 0 ? req.params.id : null,
+        parsed > 0 ? req.params.id : null,
+        Math.abs(parsed),
+        parsed > 0 ? 'bonus' : 'spend',
+        '[Admin] ' + (reason || 'Credit adjustment'),
+      ]
     );
     await conn.commit();
     res.json({ message: 'Credits adjusted', new_balance: newBal });
@@ -174,7 +188,7 @@ const getDisputes = async (req, res) => {
   try {
     const params = [];
     let where = 'WHERE 1=1';
-    if (status) { where += ' AND d.status = ?'; params.push(status); }
+    if (status) { where += ` AND d.status = $${params.length + 1}`; params.push(status); }
 
     const [rows] = await db.query(
       `SELECT d.*,
@@ -204,50 +218,51 @@ const resolveDispute = async (req, res) => {
   const conn = await db.getConnection();
   try {
     await conn.beginTransaction();
-    const [[dispute]] = await conn.query(
+    const [rows] = await conn.query(
       `SELECT d.*, sr.requester_id, sr.provider_id, sr.hours_requested, s.credits_per_hour
        FROM disputes d
        JOIN skill_requests sr ON d.request_id = sr.id
        JOIN skills s          ON sr.skill_id  = s.id
-       WHERE d.id = ? AND d.status = 'open'`,
+       WHERE d.id = $1 AND d.status = 'open'`,
       [req.params.id]
     );
-    if (!dispute) { await conn.rollback(); return res.status(404).json({ error: 'Open dispute not found' }); }
+    if (!rows.length) { await conn.rollback(); return res.status(404).json({ error: 'Open dispute not found' }); }
 
+    const dispute = rows[0];
     const cost = parseFloat(dispute.hours_requested) * parseFloat(dispute.credits_per_hour);
 
     // Always unlock first
     await conn.query(
-      'UPDATE users SET locked_credits = GREATEST(0, locked_credits - ?) WHERE id = ?',
+      'UPDATE users SET locked_credits = GREATEST(0, locked_credits - $1) WHERE id = $2',
       [cost, dispute.requester_id]
     );
 
     if (winner === 'provider') {
-      await conn.query('UPDATE users SET credits = credits - ? WHERE id = ?', [cost, dispute.requester_id]);
-      await conn.query('UPDATE users SET credits = credits + ? WHERE id = ?', [cost, dispute.provider_id]);
+      await conn.query('UPDATE users SET credits = credits - $1 WHERE id = $2', [cost, dispute.requester_id]);
+      await conn.query('UPDATE users SET credits = credits + $1 WHERE id = $2', [cost, dispute.provider_id]);
       await conn.query(
-        "INSERT INTO credit_transactions (from_user, to_user, credits, transaction_type, note) VALUES (?,?,?,'transfer','Dispute resolved — credited to provider')",
+        "INSERT INTO credit_transactions (from_user, to_user, credits, transaction_type, note) VALUES ($1,$2,$3,'transfer','Dispute resolved — credited to provider')",
         [dispute.requester_id, dispute.provider_id, cost]
       );
     } else if (winner === 'requester') {
       await conn.query(
-        "INSERT INTO credit_transactions (from_user, to_user, credits, transaction_type, note) VALUES (NULL,?,?,'refund','Dispute resolved — refunded to requester')",
+        "INSERT INTO credit_transactions (from_user, to_user, credits, transaction_type, note) VALUES (NULL,$1,$2,'refund','Dispute resolved — refunded to requester')",
         [dispute.requester_id, cost]
       );
     } else {
       const half = cost / 2;
-      await conn.query('UPDATE users SET credits = credits - ? WHERE id = ?', [half, dispute.requester_id]);
-      await conn.query('UPDATE users SET credits = credits + ? WHERE id = ?', [half, dispute.provider_id]);
+      await conn.query('UPDATE users SET credits = credits - $1 WHERE id = $2', [half, dispute.requester_id]);
+      await conn.query('UPDATE users SET credits = credits + $1 WHERE id = $2', [half, dispute.provider_id]);
     }
 
-    if (strike_provider)  await conn.query('UPDATE users SET strike_count=strike_count+1, trust_score=GREATEST(0,trust_score-10) WHERE id=?', [dispute.provider_id]);
-    if (strike_requester) await conn.query('UPDATE users SET strike_count=strike_count+1, trust_score=GREATEST(0,trust_score-10) WHERE id=?', [dispute.requester_id]);
+    if (strike_provider)  await conn.query('UPDATE users SET strike_count=strike_count+1, trust_score=GREATEST(0,trust_score-10) WHERE id=$1', [dispute.provider_id]);
+    if (strike_requester) await conn.query('UPDATE users SET strike_count=strike_count+1, trust_score=GREATEST(0,trust_score-10) WHERE id=$1', [dispute.requester_id]);
 
     await conn.query(
-      "UPDATE disputes SET status='resolved', resolution=?, resolved_by=?, resolved_at=NOW() WHERE id=?",
+      "UPDATE disputes SET status='resolved', resolution=$1, resolved_by=$2, resolved_at=NOW() WHERE id=$3",
       [resolution || null, req.user.id, req.params.id]
     );
-    await conn.query("UPDATE skill_requests SET status='completed' WHERE id=?", [dispute.request_id]);
+    await conn.query("UPDATE skill_requests SET status='completed' WHERE id=$1", [dispute.request_id]);
 
     await conn.commit();
     res.json({ message: 'Dispute resolved successfully' });
@@ -267,32 +282,36 @@ const getAnalytics = async (_req, res) => {
   try {
     const [sessions_per_day] = await db.query(
       `SELECT DATE(created_at) AS date, COUNT(*) AS count
-       FROM skill_requests WHERE created_at >= DATE_SUB(NOW(), INTERVAL 14 DAY)
+       FROM skill_requests WHERE created_at >= NOW() - INTERVAL '14 days'
        GROUP BY DATE(created_at) ORDER BY date ASC`
     );
     const [credits_per_day] = await db.query(
       `SELECT DATE(created_at) AS date, SUM(credits) AS total
        FROM credit_transactions WHERE transaction_type='transfer'
-         AND created_at >= DATE_SUB(NOW(), INTERVAL 14 DAY)
+         AND created_at >= NOW() - INTERVAL '14 days'
        GROUP BY DATE(created_at) ORDER BY date ASC`
     );
-    const [[{ total_req }]]      = await db.query('SELECT COUNT(*) AS total_req FROM skill_requests');
-    const [[{ disputed_req2 }]]  = await db.query("SELECT COUNT(*) AS disputed_req2 FROM skill_requests WHERE status='disputed'");
-    const [[{ completed_req }]]  = await db.query("SELECT COUNT(*) AS completed_req FROM skill_requests WHERE status='completed'");
-    const [[{ disputed_req }]]   = await db.query("SELECT COUNT(*) AS disputed_req FROM skill_requests WHERE status='disputed'");
-    const [[{ total_users }]]    = await db.query("SELECT COUNT(*) AS total_users FROM users WHERE role='user'");
-    const [[{ total_credits }]]  = await db.query("SELECT COALESCE(SUM(credits),0) AS total_credits FROM credit_transactions WHERE transaction_type='transfer'");
-    const [[{ new_users_week }]] = await db.query("SELECT COUNT(*) AS new_users_week FROM users WHERE created_at >= DATE_SUB(NOW(), INTERVAL 7 DAY) AND role='user'");
+    const [r1] = await db.query('SELECT COUNT(*) AS total_req FROM skill_requests');
+    const [r2] = await db.query("SELECT COUNT(*) AS disputed_req FROM skill_requests WHERE status='disputed'");
+    const [r3] = await db.query("SELECT COUNT(*) AS completed_req FROM skill_requests WHERE status='completed'");
+    const [r4] = await db.query("SELECT COUNT(*) AS total_users FROM users WHERE role='user'");
+    const [r5] = await db.query("SELECT COALESCE(SUM(credits),0) AS total_credits FROM credit_transactions WHERE transaction_type='transfer'");
+    const [r6] = await db.query("SELECT COUNT(*) AS new_users_week FROM users WHERE created_at >= NOW() - INTERVAL '7 days' AND role='user'");
+
+    const total_req    = parseInt(r1[0].total_req);
+    const disputed_req = parseInt(r2[0].disputed_req);
+    const completed_req = parseInt(r3[0].completed_req);
 
     res.json({
       sessions_per_day, credits_per_day,
-      total_users, total_sessions: parseInt(total_req),
-      completed_sessions: parseInt(completed_req),
-      disputed_sessions: parseInt(disputed_req2 || disputed_req || 0),
+      total_users:        parseInt(r4[0].total_users),
+      total_sessions:     total_req,
+      completed_sessions: completed_req,
+      disputed_sessions:  disputed_req,
       success_rate: total_req > 0 ? ((completed_req / total_req) * 100).toFixed(1) : 0,
       dispute_rate:  total_req > 0 ? ((disputed_req  / total_req) * 100).toFixed(1) : 0,
-      total_credits: parseFloat(total_credits).toFixed(2),
-      new_users_week,
+      total_credits: parseFloat(r5[0].total_credits).toFixed(2),
+      new_users_week: parseInt(r6[0].new_users_week),
     });
   } catch (err) {
     console.error('getAnalytics:', err);
@@ -301,7 +320,7 @@ const getAnalytics = async (_req, res) => {
 };
 
 // ═══════════════════════════════════════
-// 5. ALL SESSIONS (for admin sessions page)
+// 5. ALL SESSIONS
 // ═══════════════════════════════════════
 const getAllSessions = async (req, res) => {
   const { status = '', page = 1, limit = 30 } = req.query;
@@ -309,7 +328,7 @@ const getAllSessions = async (req, res) => {
   try {
     const params = [];
     let where = 'WHERE 1=1';
-    if (status) { where += ' AND sr.status = ?'; params.push(status); }
+    if (status) { where += ` AND sr.status = $${params.length + 1}`; params.push(status); }
 
     const [rows] = await db.query(
       `SELECT sr.id, sr.status, sr.hours_requested, sr.created_at,
@@ -325,16 +344,16 @@ const getAllSessions = async (req, res) => {
        JOIN users  pu ON sr.provider_id  = pu.id
        ${where}
        ORDER BY sr.created_at DESC
-       LIMIT ? OFFSET ?`,
+       LIMIT $${params.length + 1} OFFSET $${params.length + 2}`,
       [...params, parseInt(limit), parseInt(offset)]
     );
 
-    const [[{ total }]] = await db.query(
+    const [countRows] = await db.query(
       `SELECT COUNT(*) AS total FROM skill_requests sr ${where}`,
       params
     );
 
-    res.json({ sessions: rows, total });
+    res.json({ sessions: rows, total: parseInt(countRows[0].total) });
   } catch (err) {
     console.error('getAllSessions:', err.message);
     res.status(500).json({ error: 'Failed to fetch sessions' });

@@ -9,9 +9,8 @@ const createRequest = async (req, res) => {
   const requester_id = req.user.id;
 
   try {
-    // Fetch skill and provider
     const [skills] = await db.query(
-      'SELECT * FROM skills WHERE id = ? AND is_active = TRUE', [skill_id]
+      'SELECT * FROM skills WHERE id = $1 AND is_active = TRUE', [skill_id]
     );
     if (!skills.length) return res.status(404).json({ error: 'Skill not found' });
 
@@ -21,23 +20,22 @@ const createRequest = async (req, res) => {
       return res.status(400).json({ error: 'Cannot request your own skill' });
     }
 
-    // Check requester has enough available credits
     const totalCost = parseFloat(hours_requested) * parseFloat(skill.credits_per_hour);
-    const [users]   = await db.query('SELECT credits FROM users WHERE id = ?', [requester_id]);
+    const [users]   = await db.query('SELECT credits, locked_credits FROM users WHERE id = $1', [requester_id]);
     const available = parseFloat(users[0].credits) - parseFloat(users[0].locked_credits || 0);
 
     if (available < totalCost) {
       return res.status(400).json({ error: `Insufficient credits. Need ${totalCost}, have ${available}` });
     }
 
-    const [result] = await db.query(
+    const [rows] = await db.query(
       `INSERT INTO skill_requests
          (skill_id, requester_id, provider_id, hours_requested, message)
-       VALUES (?, ?, ?, ?, ?)`,
+       VALUES ($1, $2, $3, $4, $5) RETURNING id`,
       [skill_id, requester_id, skill.user_id, hours_requested, message]
     );
 
-    res.status(201).json({ message: 'Request sent', id: result.insertId });
+    res.status(201).json({ message: 'Request sent', id: rows[0].id });
   } catch (err) {
     console.error('createRequest error:', err);
     res.status(500).json({ error: 'Failed to create request' });
@@ -53,7 +51,7 @@ const getMyRequests = async (req, res) => {
        FROM skill_requests sr
        JOIN skills s ON sr.skill_id = s.id
        JOIN users  u ON sr.provider_id = u.id
-       WHERE sr.requester_id = ?
+       WHERE sr.requester_id = $1
        ORDER BY sr.created_at DESC`,
       [req.user.id]
     );
@@ -72,7 +70,7 @@ const getIncomingRequests = async (req, res) => {
        FROM skill_requests sr
        JOIN skills s ON sr.skill_id = s.id
        JOIN users  u ON sr.requester_id = u.id
-       WHERE sr.provider_id = ?
+       WHERE sr.provider_id = $1
        ORDER BY sr.created_at DESC`,
       [req.user.id]
     );
@@ -90,13 +88,14 @@ const respondToRequest = async (req, res) => {
   try {
     await conn.beginTransaction();
 
-    const [[request]] = await conn.query(
+    const [reqRows] = await conn.query(
       `SELECT sr.*, s.credits_per_hour FROM skill_requests sr
        JOIN skills s ON sr.skill_id = s.id
-       WHERE sr.id = ? AND sr.provider_id = ? AND sr.status = 'pending'`,
+       WHERE sr.id = $1 AND sr.provider_id = $2 AND sr.status = 'pending'`,
       [req.params.id, req.user.id]
     );
 
+    const request = reqRows[0];
     if (!request) {
       await conn.rollback();
       return res.status(404).json({ error: 'Request not found or already processed' });
@@ -105,31 +104,29 @@ const respondToRequest = async (req, res) => {
     if (action === 'approve') {
       const cost = parseFloat(request.hours_requested) * parseFloat(request.credits_per_hour);
 
-      // Lock requester's credits
       await conn.query(
-        'UPDATE users SET locked_credits = locked_credits + ? WHERE id = ?',
+        'UPDATE users SET locked_credits = locked_credits + $1 WHERE id = $2',
         [cost, request.requester_id]
       );
 
       await conn.query(
         `INSERT INTO credit_transactions
            (from_user, to_user, credits, transaction_type, reference_id, note)
-         VALUES (?, NULL, ?, 'lock', ?, 'Credits locked for session')`,
+         VALUES ($1, NULL, $2, 'lock', $3, 'Credits locked for session')`,
         [request.requester_id, cost, request.id]
       );
 
-      // ✅ Set 2-hour confirmation deadline from now
       await conn.query(
-        `UPDATE skill_requests 
+        `UPDATE skill_requests
          SET status = 'approved',
-             confirmation_deadline = DATE_ADD(NOW(), INTERVAL 2 HOUR)
-         WHERE id = ?`,
+             confirmation_deadline = NOW() + INTERVAL '2 hours'
+         WHERE id = $1`,
         [request.id]
       );
 
     } else {
       await conn.query(
-        "UPDATE skill_requests SET status = 'rejected' WHERE id = ?",
+        "UPDATE skill_requests SET status = 'rejected' WHERE id = $1",
         [request.id]
       );
     }
@@ -146,8 +143,6 @@ const respondToRequest = async (req, res) => {
 };
 
 // ── Dual Confirmation ──────────────────────────────────────
-// Both provider and requester must confirm to complete the session.
-// If only one confirms → dispute. Both reject → cancel.
 const confirmSession = async (req, res) => {
   const { confirmed } = req.body;
   const userId = req.user.id;
@@ -156,13 +151,14 @@ const confirmSession = async (req, res) => {
   try {
     await conn.beginTransaction();
 
-    const [[request]] = await conn.query(
+    const [reqRows] = await conn.query(
       `SELECT sr.*, s.credits_per_hour FROM skill_requests sr
        JOIN skills s ON sr.skill_id = s.id
-       WHERE sr.id = ? AND sr.status IN ('approved', 'waiting_confirmation')`,
+       WHERE sr.id = $1 AND sr.status IN ('approved', 'waiting_confirmation')`,
       [req.params.id]
     );
 
+    const request = reqRows[0];
     if (!request) {
       await conn.rollback();
       return res.status(404).json({ error: 'Request not found or not in approved state' });
@@ -176,19 +172,18 @@ const confirmSession = async (req, res) => {
       return res.status(403).json({ error: 'Not a participant' });
     }
 
-    // ✅ Check if deadline has passed
+    // Check if deadline has passed
     const now      = new Date();
     const deadline = new Date(request.confirmation_deadline);
 
     if (now > deadline) {
-      // Time is up — auto-dispute if not already
       await conn.query(
-        "UPDATE skill_requests SET status = 'disputed' WHERE id = ?",
+        "UPDATE skill_requests SET status = 'disputed' WHERE id = $1",
         [request.id]
       );
       await conn.query(
         `INSERT INTO disputes (request_id, raised_by, reason)
-         VALUES (?, ?, 'Confirmation window expired – no mutual confirmation received')`,
+         VALUES ($1, $2, 'Confirmation window expired – no mutual confirmation received')`,
         [request.id, userId]
       );
       await conn.commit();
@@ -198,82 +193,76 @@ const confirmSession = async (req, res) => {
     // Record this person's confirmation
     const field = isProvider ? 'provider_confirmed' : 'requester_confirmed';
     await conn.query(
-      `UPDATE skill_requests SET ${field} = ?, status = 'waiting_confirmation' WHERE id = ?`,
+      `UPDATE skill_requests SET ${field} = $1, status = 'waiting_confirmation' WHERE id = $2`,
       [confirmed, request.id]
     );
 
     // Re-fetch updated state
-    const [[updated]] = await conn.query(
-      'SELECT * FROM skill_requests WHERE id = ?', [request.id]
+    const [updRows] = await conn.query(
+      'SELECT * FROM skill_requests WHERE id = $1', [request.id]
     );
+    const updated = updRows[0];
 
     const cost = parseFloat(request.hours_requested) * parseFloat(request.credits_per_hour);
-
     const providerConfirmed  = updated.provider_confirmed;
     const requesterConfirmed = updated.requester_confirmed;
-
-    // ✅ Only act if BOTH have responded
     const bothResponded = providerConfirmed !== null && requesterConfirmed !== null;
 
     if (bothResponded) {
       if (providerConfirmed && requesterConfirmed) {
         // Both confirmed → transfer credits
         await conn.query(
-          `UPDATE users SET credits = credits - ?, locked_credits = locked_credits - ? WHERE id = ?`,
-          [cost, cost, request.requester_id]
+          `UPDATE users SET credits = credits - $1, locked_credits = locked_credits - $1 WHERE id = $2`,
+          [cost, request.requester_id]
         );
         await conn.query(
-          'UPDATE users SET credits = credits + ? WHERE id = ?',
+          'UPDATE users SET credits = credits + $1 WHERE id = $2',
           [cost, request.provider_id]
         );
         await conn.query(
           `INSERT INTO credit_transactions
              (from_user, to_user, credits, transaction_type, reference_id, note)
-           VALUES (?, ?, ?, 'transfer', ?, 'Session completed')`,
+           VALUES ($1, $2, $3, 'transfer', $4, 'Session completed')`,
           [request.requester_id, request.provider_id, cost, request.id]
         );
         await conn.query(
-          "UPDATE skill_requests SET status = 'completed' WHERE id = ?",
+          "UPDATE skill_requests SET status = 'completed' WHERE id = $1",
           [request.id]
         );
 
       } else if (!providerConfirmed && !requesterConfirmed) {
         // Both rejected → cancel and unlock
         await conn.query(
-          'UPDATE users SET locked_credits = locked_credits - ? WHERE id = ?',
+          'UPDATE users SET locked_credits = locked_credits - $1 WHERE id = $2',
           [cost, request.requester_id]
         );
         await conn.query(
           `INSERT INTO credit_transactions
              (from_user, to_user, credits, transaction_type, reference_id, note)
-           VALUES (NULL, ?, ?, 'unlock', ?, 'Session cancelled by both parties')`,
+           VALUES (NULL, $1, $2, 'unlock', $3, 'Session cancelled by both parties')`,
           [request.requester_id, cost, request.id]
         );
         await conn.query(
-          "UPDATE skill_requests SET status = 'cancelled' WHERE id = ?",
+          "UPDATE skill_requests SET status = 'cancelled' WHERE id = $1",
           [request.id]
         );
 
       } else {
         // One confirmed, one rejected → dispute
         await conn.query(
-          "UPDATE skill_requests SET status = 'disputed' WHERE id = ?",
+          "UPDATE skill_requests SET status = 'disputed' WHERE id = $1",
           [request.id]
         );
         await conn.query(
           `INSERT INTO disputes (request_id, raised_by, reason)
-           VALUES (?, ?, 'Confirmation mismatch – parties disagreed on session outcome')`,
+           VALUES ($1, $2, 'Confirmation mismatch – parties disagreed on session outcome')`,
           [request.id, userId]
         );
       }
-    } else {
-      // ✅ Only one person has responded so far — just wait, don't dispute
-      // The deadline checker (or the second person confirming) will resolve this
     }
 
     await conn.commit();
 
-    // Tell the user what happened
     if (!bothResponded) {
       res.json({ message: 'Your response recorded. Waiting for the other party to confirm.' });
     } else {
@@ -289,16 +278,14 @@ const confirmSession = async (req, res) => {
   }
 };
 
-// ✅ Run this on a timer — checks for expired confirmation windows
-// Called by the scheduler in server.js every 10 minutes
+// ── Auto-dispute expired confirmations ─────────────────────
 const checkExpiredConfirmations = async () => {
   const conn = await db.getConnection();
   try {
     await conn.beginTransaction();
 
-    // Find all approved/waiting sessions whose deadline has passed
     const [expired] = await conn.query(
-      `SELECT sr.*, s.credits_per_hour 
+      `SELECT sr.*, s.credits_per_hour
        FROM skill_requests sr
        JOIN skills s ON sr.skill_id = s.id
        WHERE sr.status IN ('approved', 'waiting_confirmation')
@@ -309,19 +296,18 @@ const checkExpiredConfirmations = async () => {
       const cost = parseFloat(request.hours_requested) * parseFloat(request.credits_per_hour);
 
       await conn.query(
-        "UPDATE skill_requests SET status = 'disputed' WHERE id = ?",
+        "UPDATE skill_requests SET status = 'disputed' WHERE id = $1",
         [request.id]
       );
 
       await conn.query(
         `INSERT INTO disputes (request_id, raised_by, reason)
-         VALUES (?, ?, 'Auto-disputed: confirmation window expired without mutual confirmation')`,
+         VALUES ($1, $2, 'Auto-disputed: confirmation window expired without mutual confirmation')`,
         [request.id, request.provider_id]
       );
 
-      // Unlock the requester's credits so they're not stuck
       await conn.query(
-        'UPDATE users SET locked_credits = GREATEST(0, locked_credits - ?) WHERE id = ?',
+        'UPDATE users SET locked_credits = GREATEST(0, locked_credits - $1) WHERE id = $2',
         [cost, request.requester_id]
       );
 

@@ -19,7 +19,7 @@ const register = async (req, res) => {
   try {
     // Duplicate email check
     const [existing] = await db.query(
-      'SELECT id FROM users WHERE email = ?', [email]
+      'SELECT id FROM users WHERE email = $1', [email]
     );
     if (existing.length > 0) {
       return res.status(409).json({ error: 'Email already registered' });
@@ -28,28 +28,29 @@ const register = async (req, res) => {
     // Hash password (salt rounds = 10)
     const hashed = await bcrypt.hash(password, 10);
 
-    // Insert new user with all profile fields
-    const [result] = await db.query(
+    // Insert new user
+    const [rows] = await db.query(
       `INSERT INTO users (name, email, password, bio, mobile, location, avatar_url)
-       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+       VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id`,
       [name, email, hashed, bio || null, mobile || null, location || null, avatar_url || null]
     );
+    const newId = rows[0].id;
 
     // Record welcome bonus transaction
     await db.query(
       `INSERT INTO credit_transactions
          (from_user, to_user, credits, transaction_type, note)
-       VALUES (NULL, ?, 5.00, 'bonus', 'Welcome bonus')`,
-      [result.insertId]
+       VALUES (NULL, $1, 5.00, 'bonus', 'Welcome bonus')`,
+      [newId]
     );
 
-    const token = signToken({ id: result.insertId, email, role: 'user' });
+    const token = signToken({ id: newId, email, role: 'user' });
 
     res.status(201).json({
       message: 'Account created successfully',
       token,
       user: {
-        id: result.insertId, name, email, role: 'user', credits: 5,
+        id: newId, name, email, role: 'user', credits: 5,
         bio: bio || null, mobile: mobile || null,
         location: location || null, avatar_url: avatar_url || null,
       },
@@ -68,7 +69,7 @@ const login = async (req, res) => {
     const [rows] = await db.query(
       `SELECT id, name, email, password, role, credits, locked_credits,
               bio, mobile, location, avatar_url, is_blocked
-       FROM users WHERE email = ?`,
+       FROM users WHERE email = $1`,
       [email]
     );
 
@@ -105,7 +106,7 @@ const getMe = async (req, res) => {
     const [rows] = await db.query(
       `SELECT id, name, email, role, credits, locked_credits,
               bio, mobile, location, avatar_url, created_at
-       FROM users WHERE id = ?`,
+       FROM users WHERE id = $1`,
       [req.user.id]
     );
 
@@ -126,8 +127,8 @@ const updateProfile = async (req, res) => {
 
   try {
     await db.query(
-      `UPDATE users SET name = ?, bio = ?, avatar_url = ?, mobile = ?, location = ?
-       WHERE id = ?`,
+      `UPDATE users SET name = $1, bio = $2, avatar_url = $3, mobile = $4, location = $5
+       WHERE id = $6`,
       [name, bio || null, avatar_url || null, mobile || null, location || null, req.user.id]
     );
 
