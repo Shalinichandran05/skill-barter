@@ -8,19 +8,15 @@ require('dotenv').config();
 const pool = new Pool({
   connectionString: process.env.SUPABASE_DB_URL,
   ssl: { rejectUnauthorized: false },
+  max: 2, // Limit pool size for Serverless environments to prevent connection exhaustion
+  idleTimeoutMillis: 30000,
+  connectionTimeoutMillis: 10000, // Quick timeout to prevent Vercel 15s hangs
 });
 
-// Verify connectivity on startup
-(async () => {
-  try {
-    const client = await pool.connect();
-    console.log('✅  PostgreSQL (Supabase) connected successfully');
-    client.release();
-  } catch (err) {
-    console.error('❌  PostgreSQL connection failed:', err.message);
-    process.exit(1);
-  }
-})();
+// Note: Removed the top-level IIFE that called `client.connect()` and `process.exit(1)`.
+// Serverless functions (Vercel) should connect dynamically per request, otherwise 
+// a slow connection attempt on cold start can crash the entire function container.
+// It can also exhaust connection pools rapidly across multiple Vercel instances.
 
 /**
  * Compatibility wrapper so controllers keep the same
