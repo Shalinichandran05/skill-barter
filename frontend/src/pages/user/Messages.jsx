@@ -7,7 +7,7 @@ import { useNavigate, useSearchParams } from 'react-router-dom';
 import { formatTime } from '../../utils/time';
 import api from '../../services/api';
 import { useAuth } from '../../context/AuthContext';
-import { useSocket } from '../../context/SocketContext';
+import { useSupabase } from '../../context/SupabaseContext';
 import { Spinner } from '../../components/common';
 import toast from 'react-hot-toast';
 
@@ -27,7 +27,7 @@ const Avatar = ({ src, name, size = 'sm' }) => {
 
 export default function MessagesPage() {
   const { user }       = useAuth();
-  const socket         = useSocket();
+  const supabase       = useSupabase();
   const navigate       = useNavigate();
   const [searchParams] = useSearchParams();
 
@@ -87,32 +87,32 @@ export default function MessagesPage() {
     inputRef.current?.focus();
   }, [activeUser, loadConversations]);
 
-  // Socket.io — receive new messages in real time
+  // Supabase Real-time — receive new messages
   useEffect(() => {
-    if (!socket) return;
+    if (!supabase || !user) return;
 
-    const handleNewMessage = (msg) => {
-      // If this message is from the currently active chat, add it
-      if (activeUser && msg.sender_id === activeUser.id) {
-        setMessages(prev => [...prev, msg]);
-      }
-      // Always refresh conversation list for unread counts
-      loadConversations();
-    };
-
-    const handleMessageSent = (msg) => {
-      // Update the conversation list when we send from another tab
-      loadConversations();
-    };
-
-    socket.on('new_message',   handleNewMessage);
-    socket.on('message_sent',  handleMessageSent);
+    const channel = supabase
+      .channel('public:messages')
+      .on(
+        'postgres_changes',
+        { event: 'INSERT', schema: 'public', table: 'messages' },
+        (payload) => {
+          const newMsg = payload.new;
+          // Refresh active chat if the message belongs to it
+          if (activeUser && (newMsg.sender_id === activeUser.id || newMsg.receiver_id === activeUser.id)) {
+            api.get(`/messages/${activeUser.id}`)
+               .then(({ data }) => setMessages(data))
+               .catch(() => {});
+          }
+          loadConversations();
+        }
+      )
+      .subscribe();
 
     return () => {
-      socket.off('new_message',  handleNewMessage);
-      socket.off('message_sent', handleMessageSent);
+      supabase.removeChannel(channel);
     };
-  }, [socket, activeUser, loadConversations]);
+  }, [supabase, user, activeUser, loadConversations]);
 
   // Send message
   const handleSend = async () => {

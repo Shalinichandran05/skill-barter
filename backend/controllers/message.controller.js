@@ -112,11 +112,8 @@ const sendMessage = async (req, res) => {
 
     const message = msgRows[0];
 
-    const io = req.app.get('io');
-    if (io) {
-      io.to(`user_${receiver_id}`).emit('new_message', message);
-      io.to(`user_${sender_id}`).emit('message_sent', message);
-    }
+    // Supabase Real-time will automatically pick up the INSERT due to our frontend Postgres changes subscription.
+    // No explicit socket emission needed here anymore.
 
     res.status(201).json(message);
   } catch (err) {

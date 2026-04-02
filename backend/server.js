@@ -1,13 +1,10 @@
-// server.js – SkillBarter API entry point
+// server.js – SkillBarter API entry point (Vercel Serverless Compatible)
 
 require('dotenv').config();
 const express    = require('express');
-const http       = require('http');
 const cors       = require('cors');
 const morgan     = require('morgan');
 const rateLimit  = require('express-rate-limit');
-const { Server } = require('socket.io');
-const jwt        = require('jsonwebtoken');
 
 // Route modules
 const authRoutes        = require('./routes/auth.routes');
@@ -19,45 +16,8 @@ const adminRoutes       = require('./routes/admin.routes');
 const userRoutes        = require('./routes/user.routes');
 const messageRoutes     = require('./routes/message.routes');
 
-const app    = express();
-const server = http.createServer(app);  // wrap express in http server for socket.io
-const PORT   = process.env.PORT || 5000;
-
-// ── Socket.io setup ──────────────────────────────────────
-const io = new Server(server, {
-  cors: {
-    origin:      process.env.CLIENT_URL || 'http://localhost:5173',
-    credentials: true,
-  },
-});
-
-// Attach io to app so controllers can emit events
-app.set('io', io);
-
-// Socket.io auth middleware — verify JWT on connection
-io.use((socket, next) => {
-  const token = socket.handshake.auth?.token;
-  if (!token) return next(new Error('No token'));
-  try {
-    const decoded = jwt.verify(token, process.env.JWT_SECRET);
-    socket.userId = decoded.id;
-    next();
-  } catch {
-    next(new Error('Invalid token'));
-  }
-});
-
-io.on('connection', (socket) => {
-  const userId = socket.userId;
-  console.log(`🔌  Socket connected: user ${userId}`);
-
-  // Join personal room — used to send messages to specific user
-  socket.join(`user_${userId}`);
-
-  socket.on('disconnect', () => {
-    console.log(`🔌  Socket disconnected: user ${userId}`);
-  });
-});
+const app  = express();
+const PORT = process.env.PORT || 5000;
 
 // ── Global Middleware ────────────────────────────────────
 app.use(cors({
@@ -92,6 +52,15 @@ app.get('/api/public/stats', async (_req, res) => {
   }
 });
 
+// ── Scheduled Cron Endpoint (Vercel Cron) ────────────────
+const { checkExpiredConfirmations } = require('./controllers/request.controller');
+app.get('/api/cron', async (req, res) => {
+  // If authorization header is set via Vercel Cron, you can verify it here.
+  // For now, we just execute the expired checks.
+  await checkExpiredConfirmations();
+  res.json({ status: 'ran auto-dispute checks' });
+});
+
 // ── API Routes ───────────────────────────────────────────
 app.use('/api/auth',     authRoutes);
 app.use('/api/users',    userRoutes);
@@ -111,12 +80,12 @@ app.use((err, _req, res, _next) => {
   res.status(err.status || 500).json({ error: err.message || 'Internal server error' });
 });
 
-// ── Auto-dispute expired confirmations ───────────────────
-const { checkExpiredConfirmations } = require('./controllers/request.controller');
-setInterval(checkExpiredConfirmations, 10 * 60 * 1000);
-checkExpiredConfirmations();
+// For Vercel Serverless, we export the app instance.
+module.exports = app;
 
-// Use server.listen instead of app.listen (required for socket.io)
-server.listen(PORT, () => {
-  console.log(`🚀  SkillBarter API running on http://localhost:${PORT}`);
-});
+// During local development, listen on PORT
+if (process.env.NODE_ENV !== 'production') {
+  app.listen(PORT, () => {
+    console.log(`🚀  SkillBarter API (Serverless Mode) running on http://localhost:${PORT}`);
+  });
+}

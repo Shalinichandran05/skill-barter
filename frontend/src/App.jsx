@@ -1,7 +1,7 @@
 // src/App.jsx
 import { Routes, Route, Navigate } from 'react-router-dom';
 import { AuthProvider, useAuth } from './context/AuthContext';
-import { SocketProvider } from './context/SocketContext';
+import { SupabaseProvider } from './context/SupabaseContext';
 
 // Public
 import HomePage     from './pages/Home';
@@ -52,7 +52,7 @@ const AdminRoute = ({ children }) => {
 // ── Inner app wrapped in socket provider ─────────────────
 function AppRoutes() {
   return (
-    <SocketProvider>
+    <SupabaseProvider>
       <Routes>
         {/* Public */}
         <Route path="/"         element={<HomePage />} />
@@ -84,7 +84,7 @@ function AppRoutes() {
 
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
-    </SocketProvider>
+    </SupabaseProvider>
   );
 }
 
