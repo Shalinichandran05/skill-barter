@@ -16,7 +16,11 @@ CREATE TABLE users (
   credits       DECIMAL(10,2) DEFAULT 5.00,   -- starting credits
   locked_credits DECIMAL(10,2) DEFAULT 0.00,  -- credits held in escrow
   bio           TEXT,
+  mobile        VARCHAR(20),
+  location      VARCHAR(255),
   avatar_url    VARCHAR(255),
+  trust_score   DECIMAL(5,2)  DEFAULT 100.00,
+  strike_count  INT           DEFAULT 0,
   is_blocked    BOOLEAN       DEFAULT FALSE,
   created_at    TIMESTAMP     DEFAULT CURRENT_TIMESTAMP
 );
@@ -53,6 +57,7 @@ CREATE TABLE skill_requests (
                        ) DEFAULT 'pending',
   provider_confirmed   BOOLEAN DEFAULT FALSE,
   requester_confirmed  BOOLEAN DEFAULT FALSE,
+  confirmation_deadline TIMESTAMP,
   message              TEXT,                  -- requester's intro message
   created_at           TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
   updated_at           TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
@@ -112,6 +117,18 @@ CREATE TABLE disputes (
   FOREIGN KEY (request_id)  REFERENCES skill_requests(id) ON DELETE CASCADE,
   FOREIGN KEY (raised_by)   REFERENCES users(id)          ON DELETE CASCADE,
   FOREIGN KEY (resolved_by) REFERENCES users(id)          ON DELETE SET NULL
+);
+
+-- ── Messages ───────────────────────────────────────────────
+CREATE TABLE messages (
+  id          INT AUTO_INCREMENT PRIMARY KEY,
+  sender_id   INT NOT NULL,
+  receiver_id INT NOT NULL,
+  content     TEXT NOT NULL,
+  is_read     BOOLEAN     DEFAULT FALSE,
+  created_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (sender_id)   REFERENCES users(id) ON DELETE CASCADE,
+  FOREIGN KEY (receiver_id) REFERENCES users(id) ON DELETE CASCADE
 );
 
 -- ── Seed: default admin account ────────────────────────────
