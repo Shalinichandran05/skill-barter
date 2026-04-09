@@ -15,7 +15,7 @@ CREATE TABLE IF NOT EXISTS users (
   bio            TEXT,
   mobile         VARCHAR(20),
   location       VARCHAR(255),
-  avatar_url     VARCHAR(255),
+  avatar_url     TEXT,
   trust_score    DECIMAL(5,2)  DEFAULT 100.00,
   strike_count   INT           DEFAULT 0,
   is_blocked     BOOLEAN       DEFAULT FALSE,

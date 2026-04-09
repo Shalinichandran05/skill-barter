@@ -28,11 +28,15 @@ const register = async (req, res) => {
     // Hash password (salt rounds = 10)
     const hashed = await bcrypt.hash(password, 10);
 
+    // Strip base64 data URIs — varchar(255) can't hold them; store null instead
+    const safeAvatarUrl =
+      avatar_url && !avatar_url.startsWith('data:') ? avatar_url : null;
+
     // Insert new user
     const [rows] = await db.query(
       `INSERT INTO users (name, email, password, bio, mobile, location, avatar_url)
        VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id`,
-      [name, email, hashed, bio || null, mobile || null, location || null, avatar_url || null]
+      [name, email, hashed, bio || null, mobile || null, location || null, safeAvatarUrl]
     );
     const newId = rows[0].id;
 
@@ -52,12 +56,12 @@ const register = async (req, res) => {
       user: {
         id: newId, name, email, role: 'user', credits: 5,
         bio: bio || null, mobile: mobile || null,
-        location: location || null, avatar_url: avatar_url || null,
+        location: location || null, avatar_url: safeAvatarUrl,
       },
     });
   } catch (err) {
-    console.error('register error:', err);
-    res.status(500).json({ error: 'Registration failed' });
+    console.error('register error:', err.message, err.stack);
+    res.status(500).json({ error: err.message || 'Registration failed' });
   }
 };
 
