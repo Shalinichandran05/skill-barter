@@ -5,8 +5,17 @@
 const { Pool } = require('pg');
 require('dotenv').config();
 
+// Auto-append pgbouncer and sslmode for Supabase Pooler URLs (Port 6543)
+let dbUrl = process.env.SUPABASE_DB_URL;
+if (dbUrl && dbUrl.includes('pooler.supabase.com') && dbUrl.includes(':6543')) {
+  if (!dbUrl.includes('pgbouncer=true')) {
+    const separator = dbUrl.includes('?') ? '&' : '?';
+    dbUrl += `${separator}pgbouncer=true&sslmode=require`;
+  }
+}
+
 const pool = new Pool({
-  connectionString: process.env.SUPABASE_DB_URL,
+  connectionString: dbUrl,
   ssl: { rejectUnauthorized: false },
   max: 2, // Limit pool size for Serverless environments to prevent connection exhaustion
   idleTimeoutMillis: 30000,
