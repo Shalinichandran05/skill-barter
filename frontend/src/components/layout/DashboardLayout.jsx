@@ -2,12 +2,12 @@
 import { useState, useEffect } from 'react';
 import { Outlet, NavLink, useNavigate } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext';
-import { useSupabase } from '../../context/SupabaseContext';
+import { useSocket } from '../../context/SocketContext';
 import api from '../../services/api';
 
 export default function DashboardLayout() {
   const { user, logout } = useAuth();
-  // Removed socket = useSocket() since we redefined it below
+  const socket           = useSocket();
   const navigate         = useNavigate();
   const [open, setOpen]  = useState(false);
 
@@ -39,28 +39,13 @@ export default function DashboardLayout() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // ── Import Supabase Context ─────────────────────────────
-  const supabase = useSupabase();
-
-  // ── Real-time message badge via Supabase ────────────────
+  // ── Real-time message badge via socket ────────────────
   useEffect(() => {
-    if (!supabase || !user) return;
-
-    const channel = supabase
-      .channel('public:messages_badge')
-      .on(
-        'postgres_changes',
-        { event: 'INSERT', schema: 'public', table: 'messages', filter: `receiver_id=eq.${user.id}` },
-        () => {
-          setMessageBadge(prev => prev + 1);
-        }
-      )
-      .subscribe();
-
-    return () => {
-      supabase.removeChannel(channel);
-    };
-  }, [supabase, user]);
+    if (!socket) return;
+    const handleNew = () => setMessageBadge(prev => prev + 1);
+    socket.on('new_message', handleNew);
+    return () => socket.off('new_message', handleNew);
+  }, [socket]);
 
   const handleLogout = () => { logout(); navigate('/'); };
 

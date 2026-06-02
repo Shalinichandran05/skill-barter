@@ -8,18 +8,16 @@ const submitRating = async (req, res) => {
 
   try {
     // Verify session is completed and user was a participant
-    const [rows] = await db.query(
+    const [[request]] = await db.query(
       `SELECT * FROM skill_requests
-       WHERE id = $1 AND status = 'completed'
-         AND (requester_id = $2 OR provider_id = $2)`,
-      [request_id, from_user]
+       WHERE id = ? AND status = 'completed'
+         AND (requester_id = ? OR provider_id = ?)`,
+      [request_id, from_user, from_user]
     );
 
-    if (!rows.length) {
+    if (!request) {
       return res.status(404).json({ error: 'Completed session not found' });
     }
-
-    const request = rows[0];
 
     // Rate the OTHER party
     const to_user = from_user === request.requester_id
@@ -28,14 +26,13 @@ const submitRating = async (req, res) => {
 
     await db.query(
       `INSERT INTO ratings (from_user, to_user, request_id, rating, review)
-       VALUES ($1, $2, $3, $4, $5)`,
+       VALUES (?, ?, ?, ?, ?)`,
       [from_user, to_user, request_id, rating, review]
     );
 
     res.status(201).json({ message: 'Rating submitted' });
   } catch (err) {
-    // PostgreSQL unique violation code
-    if (err.code === '23505') {
+    if (err.code === 'ER_DUP_ENTRY') {
       return res.status(409).json({ error: 'Already rated this session' });
     }
     res.status(500).json({ error: 'Failed to submit rating' });
@@ -49,7 +46,7 @@ const getUserRatings = async (req, res) => {
       `SELECT r.*, u.name AS from_name, u.avatar_url
        FROM ratings r
        JOIN users u ON r.from_user = u.id
-       WHERE r.to_user = $1
+       WHERE r.to_user = ?
        ORDER BY r.created_at DESC`,
       [req.params.userId]
     );
