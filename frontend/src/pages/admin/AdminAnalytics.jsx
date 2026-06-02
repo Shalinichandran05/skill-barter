@@ -4,7 +4,7 @@ import api from '../../services/api';
 import { Spinner } from '../../components/common';
 
 // ── Bar chart (pure CSS, no library) ─────────────────────
-const BarChart = ({ data, color, valueKey = 'count', label }) => {
+const BarChart = ({ data, color, valueKey = 'count', label, suffix = '' }) => {
   if (!data?.length) {
     return (
       <div>
@@ -19,32 +19,63 @@ const BarChart = ({ data, color, valueKey = 'count', label }) => {
     );
   }
 
-  const max = Math.max(...data.map(d => parseFloat(d[valueKey]) || 0), 1);
+  const localDateKey = (date) => {
+    const d = new Date(date);
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  };
+
+  const normalizeSeries = (rows) => {
+    const values = new Map(rows.map(row => [String(row.date).slice(0, 10), parseFloat(row[valueKey]) || 0]));
+    const today = new Date();
+
+    return Array.from({ length: 14 }, (_, index) => {
+      const d = new Date(today);
+      d.setDate(today.getDate() - (13 - index));
+      const key = localDateKey(d);
+      return { date: key, [valueKey]: values.get(key) || 0 };
+    });
+  };
+
+  const series = normalizeSeries(data);
+  const max = Math.max(...series.map(d => parseFloat(d[valueKey]) || 0), 1);
 
   return (
     <div>
-      <p className="text-xs text-white/30 uppercase tracking-widest font-semibold mb-4">{label}</p>
-      <div className="flex items-end gap-1 h-32 mt-6">
-        {data.map((d, i) => {
+      <div className="flex items-center justify-between mb-4">
+        <p className="text-xs text-white/40 uppercase tracking-widest font-semibold">{label}</p>
+        <p className="text-xs text-white/25">Last 14 days</p>
+      </div>
+      <div className="relative h-40 border-l border-b border-white/10 pl-3 pb-2">
+        <div className="absolute inset-x-3 top-1/3 border-t border-white/5" />
+        <div className="absolute inset-x-3 top-2/3 border-t border-white/5" />
+        <div className="relative flex items-end gap-2 h-full">
+        {series.map((d, i) => {
           const val = parseFloat(d[valueKey]) || 0;
           const pct = (val / max) * 100;
           return (
-            <div key={i} className="flex-1 flex flex-col items-center group relative">
-              <div className="absolute -top-6 left-1/2 -translate-x-1/2 bg-surface-50 border border-white/10
-                              text-xs text-white px-1.5 py-0.5 rounded whitespace-nowrap opacity-0
+            <div key={d.date} className="flex-1 flex flex-col items-center group relative h-full justify-end">
+              <div className="absolute -top-8 left-1/2 -translate-x-1/2 bg-surface-50 border border-white/10
+                              text-xs text-white px-2 py-1 rounded whitespace-nowrap opacity-0
                               group-hover:opacity-100 transition-opacity z-10 pointer-events-none">
-                {val}
+                {val}{suffix}
               </div>
-              <div className="w-full rounded-t transition-all duration-500"
-                style={{ height: `${Math.max(pct, 3)}%`, background: color }} />
+              <div
+                className="w-full max-w-8 rounded-t border border-white/10 transition-all duration-500 shadow-lg"
+                style={{
+                  height: val > 0 ? `${Math.max(pct, 14)}%` : '4px',
+                  background: val > 0 ? color : 'rgba(255,255,255,0.08)',
+                  boxShadow: val > 0 ? `0 0 18px ${color}` : 'none',
+                }}
+              />
             </div>
           );
         })}
+        </div>
       </div>
       <div className="flex gap-1 mt-2">
-        {data.map((d, i) => (
-          <div key={i} className="flex-1 text-center">
-            {i % 2 === 0 && (
+        {series.map((d, i) => (
+          <div key={d.date} className="flex-1 text-center">
+            {(i === 0 || i === series.length - 1 || i % 3 === 0) && (
               <p className="text-white/20 text-[9px] truncate">
                 {new Date(d.date).toLocaleDateString('en-IN', { month: 'short', day: 'numeric' })}
               </p>
@@ -52,6 +83,56 @@ const BarChart = ({ data, color, valueKey = 'count', label }) => {
           </div>
         ))}
       </div>
+    </div>
+  );
+};
+
+const STATUS_COLORS = {
+  completed: '#16a34a',
+  pending: '#ca8a04',
+  approved: '#2563eb',
+  waiting_confirmation: '#7c3aed',
+  disputed: '#be123c',
+  rejected: '#64748b',
+  cancelled: '#94a3b8',
+};
+
+const StatusBreakdown = ({ rows = [], total = 0 }) => {
+  const sorted = rows
+    .map(row => ({ status: row.status, count: Number(row.count) || 0 }))
+    .filter(row => row.count > 0)
+    .sort((a, b) => b.count - a.count);
+
+  return (
+    <div>
+      <div className="flex items-center justify-between mb-5">
+        <p className="text-xs text-white/40 uppercase tracking-widest font-semibold">Session status mix</p>
+        <p className="text-xs text-white/25">{total} total</p>
+      </div>
+      {sorted.length === 0 ? (
+        <p className="text-white/25 text-sm py-10 text-center">No sessions recorded yet.</p>
+      ) : (
+        <div className="space-y-3">
+          {sorted.map(({ status, count }) => {
+            const pct = total > 0 ? (count / total) * 100 : 0;
+            const label = status.replace('_', ' ');
+            return (
+              <div key={status}>
+                <div className="flex justify-between text-xs mb-1">
+                  <span className="text-white/50 capitalize">{label}</span>
+                  <span className="font-mono text-white/70">{count} · {pct.toFixed(1)}%</span>
+                </div>
+                <div className="h-2.5 bg-surface-100 rounded-full overflow-hidden">
+                  <div
+                    className="h-full rounded-full transition-all duration-700"
+                    style={{ width: `${Math.max(pct, 2)}%`, background: STATUS_COLORS[status] || '#6b7280' }}
+                  />
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
     </div>
   );
 };
@@ -113,16 +194,11 @@ export default function AdminAnalytics() {
   const newUsersWeek    = data?.new_users_week        ?? 0;
   const successRate     = data?.success_rate          ?? '0.0';
   const disputeRate     = data?.dispute_rate          ?? '0.0';
+  const pendingRate     = data?.pending_rate          ?? '0.0';
+  const pendingSess     = data?.pending_sessions      ?? 0;
   const sessionsPerDay  = data?.sessions_per_day      ?? [];
   const creditsPerDay   = data?.credits_per_day       ?? [];
-
-  // Pending = sessions still in progress (not completed, not disputed, not cancelled)
-  // We get this from backend: total - completed - disputed
-  const disputedSess = data?.disputed_sessions ?? 0;
-  const activeSess   = totalSessions - completedSess - disputedSess;
-  const pendingRate  = totalSessions > 0
-    ? ((activeSess / totalSessions) * 100).toFixed(1)
-    : '0.0';
+  const statusCounts    = data?.status_counts         ?? [];
 
   return (
     <div className="space-y-8 animate-fade-in">
@@ -163,11 +239,11 @@ export default function AdminAnalytics() {
       </div>
 
       {/* Charts */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+      <div className="grid grid-cols-1 xl:grid-cols-3 gap-6">
         <div className="card">
           <BarChart
             data={sessionsPerDay}
-            color="rgba(107,15,26,0.85)"
+            color="rgba(225,29,72,0.85)"
             valueKey="count"
             label="Sessions per day (last 14 days)"
           />
@@ -175,10 +251,14 @@ export default function AdminAnalytics() {
         <div className="card">
           <BarChart
             data={creditsPerDay}
-            color="rgba(22,163,74,0.7)"
+            color="rgba(22,163,74,0.8)"
             valueKey="total"
             label="Credits exchanged per day (last 14 days)"
+            suffix=" cr"
           />
+        </div>
+        <div className="card">
+          <StatusBreakdown rows={statusCounts} total={totalSessions} />
         </div>
       </div>
 
@@ -190,6 +270,7 @@ export default function AdminAnalytics() {
             { label: 'Total registered users',    value: totalUsers                  },
             { label: 'Total skill sessions',       value: totalSessions               },
             { label: 'Completed sessions',         value: completedSess               },
+            { label: 'Pending requests',           value: pendingSess                 },
             { label: 'Session success rate',       value: `${successRate}%`          },
             { label: 'Dispute rate',               value: `${disputeRate}%`          },
             { label: 'Total credits exchanged',    value: `${totalCredits} cr`       },

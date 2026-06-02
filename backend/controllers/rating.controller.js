@@ -7,27 +7,29 @@ const submitRating = async (req, res) => {
   const from_user = req.user.id;
 
   try {
-    // Verify session is completed and user was a participant
+    const parsedRating = Number(rating);
+    if (!Number.isInteger(parsedRating) || parsedRating < 1 || parsedRating > 5) {
+      return res.status(400).json({ error: 'Rating must be between 1 and 5' });
+    }
+
+    // Verify session is completed and the current user requested it.
     const [[request]] = await db.query(
       `SELECT * FROM skill_requests
        WHERE id = ? AND status = 'completed'
-         AND (requester_id = ? OR provider_id = ?)`,
-      [request_id, from_user, from_user]
+         AND requester_id = ?`,
+      [request_id, from_user]
     );
 
     if (!request) {
-      return res.status(404).json({ error: 'Completed session not found' });
+      return res.status(403).json({ error: 'Only the requester can rate a completed session' });
     }
 
-    // Rate the OTHER party
-    const to_user = from_user === request.requester_id
-      ? request.provider_id
-      : request.requester_id;
+    const to_user = request.provider_id;
 
     await db.query(
       `INSERT INTO ratings (from_user, to_user, request_id, rating, review)
        VALUES (?, ?, ?, ?, ?)`,
-      [from_user, to_user, request_id, rating, review]
+      [from_user, to_user, request_id, parsedRating, review]
     );
 
     res.status(201).json({ message: 'Rating submitted' });

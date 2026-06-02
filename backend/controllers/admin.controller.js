@@ -265,31 +265,62 @@ const resolveDispute = async (req, res) => {
 // ═══════════════════════════════════════
 const getAnalytics = async (_req, res) => {
   try {
+    const dateKey = (date) => {
+      if (typeof date === 'string') return date.slice(0, 10);
+      const d = new Date(date);
+      const y = d.getFullYear();
+      const m = String(d.getMonth() + 1).padStart(2, '0');
+      const day = String(d.getDate()).padStart(2, '0');
+      return `${y}-${m}-${day}`;
+    };
+
+    const buildDailySeries = (rows, valueKey) => {
+      const values = new Map(rows.map(row => [dateKey(row.date), parseFloat(row[valueKey]) || 0]));
+      const today = new Date();
+
+      return Array.from({ length: 14 }, (_, index) => {
+        const d = new Date(today);
+        d.setDate(today.getDate() - (13 - index));
+        const key = dateKey(d);
+        return { date: key, [valueKey]: values.get(key) || 0 };
+      });
+    };
+
     const [sessions_per_day] = await db.query(
-      `SELECT DATE(created_at) AS date, COUNT(*) AS count
+      `SELECT DATE_FORMAT(created_at, '%Y-%m-%d') AS date, COUNT(*) AS count
        FROM skill_requests WHERE created_at >= DATE_SUB(NOW(), INTERVAL 14 DAY)
-       GROUP BY DATE(created_at) ORDER BY date ASC`
+       GROUP BY DATE_FORMAT(created_at, '%Y-%m-%d') ORDER BY date ASC`
     );
     const [credits_per_day] = await db.query(
-      `SELECT DATE(created_at) AS date, SUM(credits) AS total
+      `SELECT DATE_FORMAT(created_at, '%Y-%m-%d') AS date, SUM(credits) AS total
        FROM credit_transactions WHERE transaction_type='transfer'
          AND created_at >= DATE_SUB(NOW(), INTERVAL 14 DAY)
-       GROUP BY DATE(created_at) ORDER BY date ASC`
+       GROUP BY DATE_FORMAT(created_at, '%Y-%m-%d') ORDER BY date ASC`
+    );
+    const [status_counts] = await db.query(
+      `SELECT status, COUNT(*) AS count
+       FROM skill_requests
+       GROUP BY status`
     );
     const [[{ total_req }]]      = await db.query('SELECT COUNT(*) AS total_req FROM skill_requests');
     const [[{ disputed_req2 }]]  = await db.query("SELECT COUNT(*) AS disputed_req2 FROM skill_requests WHERE status='disputed'");
     const [[{ completed_req }]]  = await db.query("SELECT COUNT(*) AS completed_req FROM skill_requests WHERE status='completed'");
+    const [[{ pending_req }]]    = await db.query("SELECT COUNT(*) AS pending_req FROM skill_requests WHERE status='pending'");
     const [[{ disputed_req }]]   = await db.query("SELECT COUNT(*) AS disputed_req FROM skill_requests WHERE status='disputed'");
     const [[{ total_users }]]    = await db.query("SELECT COUNT(*) AS total_users FROM users WHERE role='user'");
     const [[{ total_credits }]]  = await db.query("SELECT COALESCE(SUM(credits),0) AS total_credits FROM credit_transactions WHERE transaction_type='transfer'");
     const [[{ new_users_week }]] = await db.query("SELECT COUNT(*) AS new_users_week FROM users WHERE created_at >= DATE_SUB(NOW(), INTERVAL 7 DAY) AND role='user'");
 
     res.json({
-      sessions_per_day, credits_per_day,
+      sessions_per_day: buildDailySeries(sessions_per_day, 'count'),
+      credits_per_day: buildDailySeries(credits_per_day, 'total'),
+      status_counts,
       total_users, total_sessions: parseInt(total_req),
       completed_sessions: parseInt(completed_req),
+      pending_sessions: parseInt(pending_req),
       disputed_sessions: parseInt(disputed_req2 || disputed_req || 0),
       success_rate: total_req > 0 ? ((completed_req / total_req) * 100).toFixed(1) : 0,
+      pending_rate: total_req > 0 ? ((pending_req / total_req) * 100).toFixed(1) : 0,
       dispute_rate:  total_req > 0 ? ((disputed_req  / total_req) * 100).toFixed(1) : 0,
       total_credits: parseFloat(total_credits).toFixed(2),
       new_users_week,

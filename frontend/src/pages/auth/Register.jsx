@@ -24,9 +24,13 @@ export default function RegisterPage() {
   const [form,    setForm]    = useState(EMPTY_FORM);
   const [preview, setPreview] = useState(null);       // local image preview
   const [loading, setLoading] = useState(false);
+  const [editableFields, setEditableFields] = useState({});
 
   const handleChange = e =>
     setForm(f => ({ ...f, [e.target.name]: e.target.value }));
+
+  const unlockField = name =>
+    setEditableFields(fields => ({ ...fields, [name]: true }));
 
   // ── Avatar file → base64 preview (display only, URL stored as data URI) ──
   const handleFile = e => {
@@ -46,7 +50,7 @@ export default function RegisterPage() {
 
   // ── Step 1 validation ─────────────────────────────────────
   const goToStep2 = e => {
-    e.preventDefault();
+    e?.preventDefault();
     if (!form.name.trim())          { toast.error('Name is required');                  return; }
     if (!form.email.trim())         { toast.error('Email is required');                 return; }
     if (form.password.length < 6)   { toast.error('Password must be at least 6 chars'); return; }
@@ -55,7 +59,10 @@ export default function RegisterPage() {
 
   // ── Final submit ──────────────────────────────────────────
   const handleSubmit = async e => {
-    e.preventDefault();
+    e?.preventDefault();
+    if (!form.location.trim()) { toast.error('Location is required'); return; }
+    if (!form.mobile.trim())   { toast.error('Mobile number is required'); return; }
+
     setLoading(true);
     try {
       const { data } = await api.post('/auth/register', form);
@@ -85,26 +92,29 @@ export default function RegisterPage() {
     return (
       <AuthShell title="Create your account" subtitle="Step 1 of 2 — Account details">
         <StepDots />
-        <form onSubmit={goToStep2} className="space-y-5">
+        <form onSubmit={e => e.preventDefault()} className="space-y-5" autoComplete="off" data-lpignore="true" data-1p-ignore="true">
           <div>
             <label className="label">Full Name *</label>
-            <input className="input" type="text" name="name"
+            <input className="input" type="text" name="name" autoComplete="off"
+              data-lpignore="true" data-1p-ignore="true"
               placeholder="Jane Doe"
               value={form.name} onChange={handleChange} required />
           </div>
           <div>
             <label className="label">Email *</label>
-            <input className="input" type="email" name="email"
+            <input className="input" type="email" name="email" autoComplete="off"
+              data-lpignore="true" data-1p-ignore="true"
               placeholder="you@example.com"
               value={form.email} onChange={handleChange} required />
           </div>
           <div>
             <label className="label">Password *</label>
-            <input className="input" type="password" name="password"
+            <input className="input" type="password" name="password" autoComplete="new-password"
+              data-lpignore="true" data-1p-ignore="true"
               placeholder="Min. 6 characters"
               value={form.password} onChange={handleChange} required minLength={6} />
           </div>
-          <button type="submit" className="btn-primary w-full py-3 mt-2">
+          <button type="button" onClick={goToStep2} className="btn-primary w-full py-3 mt-2">
             Continue →
           </button>
         </form>
@@ -122,7 +132,7 @@ export default function RegisterPage() {
   return (
     <AuthShell title="Complete your profile" subtitle="Step 2 of 2 — Tell the community about you">
       <StepDots />
-      <form onSubmit={handleSubmit} className="space-y-5">
+      <div className="space-y-5" data-lpignore="true" data-1p-ignore="true">
 
         {/* Avatar upload */}
         <div className="flex flex-col items-center gap-3">
@@ -152,17 +162,26 @@ export default function RegisterPage() {
         {/* Location */}
         <div>
           <label className="label">Location *</label>
-          <input className="input" type="text" name="location"
+          <input className="input" type="search" name="profile_location" autoComplete="new-password"
+            readOnly={!editableFields.location}
+            onMouseDown={() => unlockField('location')}
+            onFocus={() => unlockField('location')}
+            data-lpignore="true" data-1p-ignore="true" aria-autocomplete="none" spellCheck="false"
             placeholder="e.g. Chennai, Tamil Nadu"
-            value={form.location} onChange={handleChange} required />
+            value={form.location} onChange={e => setForm(f => ({ ...f, location: e.target.value }))} required />
         </div>
 
         {/* Mobile */}
         <div>
           <label className="label">Mobile Number *</label>
-          <input className="input" type="tel" name="mobile"
+          <input className="input" type="search" name="profile_phone" autoComplete="new-password" inputMode="tel"
+            id="register-mobile"
+            readOnly={!editableFields.mobile}
+            onMouseDown={() => unlockField('mobile')}
+            onFocus={() => unlockField('mobile')}
+            data-lpignore="true" data-1p-ignore="true" aria-autocomplete="none" spellCheck="false"
             placeholder="e.g. +91 98765 43210"
-            value={form.mobile} onChange={handleChange} required />
+            value={form.mobile} onChange={e => setForm(f => ({ ...f, mobile: e.target.value }))} required />
         </div>
 
         {/* Bio */}
@@ -171,6 +190,9 @@ export default function RegisterPage() {
           <textarea
             className="input resize-none h-20"
             name="bio"
+            autoComplete="off"
+            data-lpignore="true"
+            data-1p-ignore="true"
             placeholder="Tell the community a little about yourself…"
             value={form.bio}
             onChange={handleChange}
@@ -185,11 +207,11 @@ export default function RegisterPage() {
           >
             ← Back
           </button>
-          <button type="submit" className="btn-primary flex-1 py-3" disabled={loading}>
+          <button type="button" onClick={handleSubmit} className="btn-primary flex-1 py-3" disabled={loading}>
             {loading ? 'Creating account…' : 'Create Account 🎉'}
           </button>
         </div>
-      </form>
+      </div>
     </AuthShell>
   );
 }

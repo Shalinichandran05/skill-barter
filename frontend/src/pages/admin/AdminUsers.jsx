@@ -220,6 +220,7 @@ export default function AdminUsers() {
               <div>
                 <h3 className="font-bold text-lg">{detailUser.name}</h3>
                 <p className="text-white/40 text-sm">{detailUser.email}</p>
+                {detailUser.mobile && <p className="text-white/30 text-xs">Mobile: {detailUser.mobile}</p>}
                 {detailUser.location && <p className="text-white/30 text-xs">📍 {detailUser.location}</p>}
               </div>
             </div>

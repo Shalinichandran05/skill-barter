@@ -49,13 +49,17 @@ const getMyRequests = async (req, res) => {
   try {
     const [rows] = await db.query(
       `SELECT sr.*, s.skill_name, s.category, s.credits_per_hour,
-              u.name AS provider_name, u.avatar_url AS provider_avatar
+              u.name AS provider_name, u.avatar_url AS provider_avatar,
+              EXISTS(
+                SELECT 1 FROM ratings r
+                WHERE r.request_id = sr.id AND r.from_user = ?
+              ) AS has_user_rating
        FROM skill_requests sr
        JOIN skills s ON sr.skill_id = s.id
        JOIN users  u ON sr.provider_id = u.id
        WHERE sr.requester_id = ?
        ORDER BY sr.created_at DESC`,
-      [req.user.id]
+      [req.user.id, req.user.id]
     );
     res.json(rows);
   } catch (err) {

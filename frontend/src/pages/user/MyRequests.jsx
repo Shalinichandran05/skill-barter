@@ -60,10 +60,16 @@ export default function MyRequests() {
       await api.post('/ratings', { request_id: rateModal.id, ...rateForm });
       toast.success('Rating submitted!');
       setRateModal(null);
+      load();
     } catch (err) { toast.error(err.response?.data?.error || 'Failed'); }
   };
 
   const currentList = tab === 0 ? sent : incoming;
+  const activeStatuses = new Set(['pending', 'approved', 'waiting_confirmation']);
+  const tabCounts = [
+    sent.filter(r => activeStatuses.has(r.status)).length,
+    incoming.filter(r => activeStatuses.has(r.status)).length,
+  ];
 
   return (
     <div className="space-y-6 animate-fade-in">
@@ -79,9 +85,11 @@ export default function MyRequests() {
               ${tab === i ? 'bg-maroon-950 text-white shadow-glow-maroon' : 'text-white/40 hover:text-white'}`}
           >
             {t}
-            <span className={`ml-1.5 text-xs ${tab === i ? 'text-maroon-300' : 'text-white/20'}`}>
-              {i === 0 ? sent.length : incoming.length}
-            </span>
+            {tabCounts[i] > 0 && (
+              <span className={`ml-1.5 text-xs ${tab === i ? 'text-maroon-300' : 'text-white/20'}`}>
+                {tabCounts[i]}
+              </span>
+            )}
           </button>
         ))}
       </div>
@@ -206,7 +214,7 @@ function RequestCard({ request: r, isIncoming, onRespond, onConfirm, onRate, act
 })()}
 
         {/* Rate completed session */}
-        {r.status === 'completed' && (
+        {!isIncoming && r.status === 'completed' && !r.has_user_rating && (
           <button onClick={onRate} className="btn-secondary py-1.5 text-xs">★ Leave Rating</button>
         )}
       </div>

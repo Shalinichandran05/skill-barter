@@ -2,6 +2,7 @@
 // Displays credit balance and full transaction history
 
 import { useState, useEffect } from 'react';
+import { useAuth } from '../../context/AuthContext';
 import api from '../../services/api';
 import { PageHeader, Spinner, StatCard } from '../../components/common';
 
@@ -21,9 +22,28 @@ const TYPE_SIGNS = {
 };
 
 export default function Wallet() {
+  const { user } = useAuth();
   const [wallet,  setWallet]  = useState(null);
   const [txns,    setTxns]    = useState([]);
   const [loading, setLoading] = useState(true);
+
+  const isIncomingTransfer = (txn) =>
+    txn.transaction_type === 'transfer' && Number(txn.to_user) === Number(user?.id);
+
+  const isOutgoingTransfer = (txn) =>
+    txn.transaction_type === 'transfer' && Number(txn.from_user) === Number(user?.id);
+
+  const getTxnStyle = (txn) => {
+    if (isIncomingTransfer(txn)) return 'text-green-400';
+    if (isOutgoingTransfer(txn)) return 'text-red-400';
+    return TYPE_STYLES[txn.transaction_type] || 'text-white/40';
+  };
+
+  const getTxnSign = (txn) => {
+    if (isIncomingTransfer(txn)) return '+';
+    if (isOutgoingTransfer(txn)) return '-';
+    return TYPE_SIGNS[txn.transaction_type] || '';
+  };
 
   useEffect(() => {
     Promise.all([
@@ -84,8 +104,8 @@ export default function Wallet() {
                 className="flex items-center justify-between py-3 px-3 rounded-lg hover:bg-surface-100 transition-colors"
               >
                 <div className="flex items-center gap-3 min-w-0">
-                  <div className={`w-8 h-8 rounded-full bg-surface-100 flex items-center justify-center text-sm font-bold shrink-0 ${TYPE_STYLES[t.transaction_type] || 'text-white/40'}`}>
-                    {TYPE_SIGNS[t.transaction_type] || '·'}
+                  <div className={`w-8 h-8 rounded-full bg-surface-100 flex items-center justify-center text-sm font-bold shrink-0 ${getTxnStyle(t)}`}>
+                    {getTxnSign(t) || '·'}
                   </div>
                   <div className="min-w-0">
                     <p className="text-sm font-medium capitalize">
@@ -97,8 +117,8 @@ export default function Wallet() {
                   </div>
                 </div>
                 <div className="text-right shrink-0 ml-4">
-                  <p className={`font-semibold font-mono ${TYPE_STYLES[t.transaction_type] || 'text-white/60'}`}>
-                    {TYPE_SIGNS[t.transaction_type] || ''}{parseFloat(t.credits).toFixed(2)}
+                  <p className={`font-semibold font-mono ${getTxnStyle(t)}`}>
+                    {getTxnSign(t)}{parseFloat(t.credits).toFixed(2)}
                   </p>
                   <p className="text-xs text-white/20">
                     {new Date(t.created_at).toLocaleDateString()}
