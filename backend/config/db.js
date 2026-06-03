@@ -12,9 +12,13 @@ const pool = mysql.createPool({
   password:           process.env.DB_PASSWORD || '',
   database:           process.env.DB_NAME     || 'skillbarter',
   waitForConnections: true,
-  connectionLimit:    10,       // max simultaneous connections
+  connectionLimit:    10,
   queueLimit:         0,
-  timezone:           'local',  // use system local timezone
+  timezone:           'local',
+
+  ssl: process.env.NODE_ENV === 'production'
+    ? { rejectUnauthorized: false }
+    : undefined,
 });
 
 // Verify connectivity on startup
